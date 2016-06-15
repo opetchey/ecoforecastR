@@ -2,18 +2,25 @@
 ##' @title fit_dlm
 ##' @author Mike Dietze
 ##' @export
-##' 
-##' 
+##' @param model list containing the following elements
+##' \itemize{
+##'  \item{obs}{column name of the observed data. REQUIRED}
+##'  \item{fixed}{formula for fixed effects. Response variable is optional but should be 'x' if included}
+##'  \item{random}{not implemented yet; will be formula for random effects}
+##'  \item{n.iter}{number of mcmc iterations}
+##' }
+##' @param data  data frame containing observations and covariates
+##' @description Fits a Bayesian state-space dynamic linear model using JAGS
 fit_dlm <- function(model=NULL,data){
-  
-  library(rjags)
-  
+
   obs   = model$obs
   fixed  = model$fixed
   random = model$random
-  data = as.data.frame(data)
   n.iter = ifelse(is.null(model$n.iter),5000,model$n.iter)
-  out.variables = c("x","tau_obs","tau_add")
+
+  data = as.data.frame(data)
+  
+  out.variables = c("x","tau_obs","tau_add","beta_IC")
   
   
   ## observation design matrix
@@ -40,8 +47,13 @@ fit_dlm <- function(model=NULL,data){
     if(is.null(data)) print("formula provided but covariate data is absent:",fixed)
     fixed = ifelse(length(grep("~",fixed)) == 0,paste("~",fixed),fixed)
     fixed = sub("x*~","~",x=fixed)
-    Z = with(data,model.matrix(formula(fixed))) 
+    options(na.action = na.pass) 
+    Z = with(data,model.matrix(formula(fixed),na.action=na.pass)) 
     Z = as.matrix(Z[,-which(colnames(Z)=="(Intercept)")])
+    if(sum(is.na(Z))>0){
+      print("WARNING: missing covariate data")
+      print(apply(is.na(Z),2,sum))
+    }
   }
   ## alternatively might be able to get fixed and random effects simultaneously using
   ## lme4::lFormula(formula("x ~ FIXED + (1|FACTOR)"),na.action=na.pass)
@@ -65,6 +77,7 @@ fit_dlm <- function(model=NULL,data){
   #RANDOM  }
 
   #### Fixed Effects
+  beta_IC~dnorm(0,0.001)
   ##BETAs
   
   #### Data Model
@@ -74,7 +87,7 @@ fit_dlm <- function(model=NULL,data){
   
   #### Process Model
   for(t in 2:n){
-    mu[t] <- x[t-1] ##PROCESS
+    mu[t] <- beta_IC*x[t-1] ##PROCESS
     x[t]~dnorm(mu[t],tau_add)
   }
 
@@ -115,10 +128,10 @@ fit_dlm <- function(model=NULL,data){
                     #inits=init,
                     n.chains=3)
   
-  mc3.out <- coda.samples(model=mc3, variable.names=out.variables, n.iter=n.iter)                              
+  mc3.out <- coda.samples(model=mc3, variable.names=out.variables, n.iter=n.iter)
   
   ## split output
-  out = list(params=NULL,predict=NULL,model=my.model)
+  out = list(params=NULL,predict=NULL,model=my.model,data=mydat)
   mfit = as.matrix(mc3.out,chains=TRUE)
   pred.cols = union(grep("x[",colnames(mfit),fixed=TRUE),grep("mu[",colnames(mfit),fixed=TRUE))
   chain.col = which(colnames(mfit)=="CHAIN")
@@ -127,12 +140,3 @@ fit_dlm <- function(model=NULL,data){
   return(out)
   
 }  ## end fit_dlm
-
-mat2mcmc.list <- function(w){
-  temp <- list()
-  chain.col = which(colnames(w)=="CHAIN")
-  for(i in unique(w[,"CHAIN"])){
-    temp[[i]] <- as.mcmc(w[w[,"CHAIN"]==i,-chain.col])
-  }
-  return(as.mcmc.list(temp))
-}

@@ -1,0 +1,65 @@
+---
+title: "FirstPrinciplesExample"
+author: "Michael Dietze"
+date: "June 14, 2016"
+output: html_document
+---
+
+```{r}
+CLEAN=FALSE
+library(ecoforecastR)
+n.iter = 5000
+```
+
+
+
+```{r}
+## read data
+flux <- read.csv("http://flux.aos.wisc.edu/data/cheas/sylvania/flux/prelim/sylvaniaflux_2016.txt",header=FALSE,skip=18,row.names=NULL)
+names <- apply(flux,2,function(x) as.character(x)[1])
+units <-  apply(flux,2,function(x) as.character(x)[2])
+flux <- sapply(flux[-(1:2),],function(x) as.numeric(as.character(x)))
+flux[flux==-9999] <- NA
+flux[flux==-6999] <- NA
+colnames(flux) = names
+flux = as.data.frame(flux)
+time <- as.POSIXct(strptime(paste(flux$YEAR,flux$DTIME),"%Y %j","GMT")) + (flux$DTIME-floor(flux$DTIME))*86400
+
+## apply U* filter
+flux$NEE[flux$`Flagu*` > 0 ] = NA
+plot(time,flux$NEE,type='l')
+## response = NEE
+## drivers = TA, TS1, TS2, PREC, RH, PRESS, VPD, SWC1, SWC2, PAR, etc.
+cor(flux[,c("NEE","TA","TS1","TS2","PREC","RH","VPD","SWC1","SWC2","PAR")],use = "pairwise.complete")
+plot(flux$PAR,-flux$NEE)
+summary(lm(NEE~PAR,flux))
+
+data = flux[1:300,]
+my.time = time[seq_along(data$NEE)]
+
+```
+
+```{r}
+if(!file.exists("RWfit.RData") | CLEAN ){
+  RWfit <- fit_dlm(list(obs="NEE",n.iter=n.iter),data)
+  save(RWfit,file="RWfit.RData")
+}else{
+  load("RWfit.RData")
+}
+
+plot_ss(my.time,RWfit,ylab="NEE",xlab="time")
+plot(RWfit$params)
+```
+
+```{r}
+if(!file.exists("FEfit.RData") | CLEAN ){
+  FEfit <- fit_dlm(model=list(obs="NEE",fixed="~ PAR + TS1",n.iter=n.iter),data)
+  save(FEfit,file="FEfit.RData")
+}else{
+  load("FEfit.RData")
+}
+
+plot_ss(my.time,FEfit,ylab="NEE",xlab="time")
+plot(FEfit$params)
+summary(FEfit$params)
+```
