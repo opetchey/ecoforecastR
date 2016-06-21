@@ -49,7 +49,7 @@ fit_dlm <- function(model=NULL,data){
     fixed = sub("x*~","~",x=fixed)
     options(na.action = na.pass) 
     Z = with(data,model.matrix(formula(fixed),na.action=na.pass)) 
-    Z = as.matrix(Z[,-which(colnames(Z)=="(Intercept)")])
+#    Z = as.matrix(Z[,-which(colnames(Z)=="(Intercept)")])
     if(sum(is.na(Z))>0){
       print("WARNING: missing covariate data")
       print(apply(is.na(Z),2,sum))
@@ -79,10 +79,12 @@ fit_dlm <- function(model=NULL,data){
   #### Fixed Effects
   beta_IC~dnorm(0,0.001)
   ##BETAs
+  ##MISSING_MU
   
   #### Data Model
   for(t in 1:n){
-  OBS[t] ~ dnorm(x[t],tau_obs)
+    OBS[t] ~ dnorm(x[t],tau_obs)
+    ##MISSING
   }
   
   #### Process Model
@@ -102,11 +104,22 @@ fit_dlm <- function(model=NULL,data){
   Pformula = NULL
   if(!is.null(Z)){
     Pnames = gsub(" ","_",colnames(Z))
+    Pnames = gsub("(","",Pnames,fixed=TRUE)
+    Pnames = gsub(")","",Pnames,fixed=TRUE)
     Pformula = paste(Pformula,paste0("+ beta",Pnames,"*Z[t,",1:ncol(Z),"]",collapse=" "))
     Ppriors = paste0("beta",Pnames,"~dnorm(0,0.001)",collapse="\n")
     my.model = sub(pattern="##BETAs",Ppriors,my.model)  
     mydat[["Z"]] = Z
     out.variables = c(out.variables,paste0("beta",Pnames))  
+    
+    ## missing data model
+    MDprior <- paste(
+                paste0("mu",Pnames,"~dnorm(0,0.001)",collapse="\n"),
+                paste0("tau",Pnames,"~dgamma(0.01,0.01)",collapse="\n")
+               )
+    my.model <- sub(pattern="##MISSING_MU",MDprior,my.model)
+    MDformula <- paste0("Z[t,",1:ncol(Z),"] ~ dnorm(mu",Pnames,",tau",Pnames,")",collapse="\n")
+    my.model <- sub(pattern="##MISSING",MDformula,my.model)
   }
   
   ## RANDOM EFFECTS

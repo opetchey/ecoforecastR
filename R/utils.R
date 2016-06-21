@@ -34,14 +34,55 @@ ciEnvelope <- function(x,ylo,yhi,...){
 ##' @description plot time series output of a state-space model
 ##' @param time time axis values
 ##' @param fit fit_dlm output object
+##' @param add add lines to current plot. Default is FALSE
 ##' @param ... optional graphical parameters
-plot_ss <- function(time,fit,...){
+plot_ss <- function(time,fit,add=FALSE,...){
   ci <- apply(as.matrix(fit$predict),2,quantile,c(0.025,0.5,0.975))
-  plot(time,ci[2,],type='n',ylim=range(ci,na.rm=TRUE),...)
+  if(!add){
+    args <- list(...)
+    args[['x']]    <- time
+    args[['y']]    <- ci[2,]
+    args[['type']] <- 'n'
+    if(!("ylim" %in% names(args))) args[['ylim']] <- range(ci,na.rm=TRUE)
+    do.call(plot,args)
+  }
   ciEnvelope(time,ci[1,],ci[3,],col="lightBlue")
   lines(time,ci[2,],col="blue")
-  points(time,fit$data$OBS,pch="+",cex=0.5)
+  if(!is.null(fit$data)){
+    points(time,fit$data$OBS,pch="+",cex=0.5)
+  }
 }
 
+##' @name solar_geom
+##' @title solar_geom
+##' @export
+##' @author Mike Dietze
+##' @description calculates potential top-of-atmosphere shortwave radiation as a function of day of year and location
+##' @param doy time as day of year. Integers indicated midnight.
+##' @param lon longitude
+##' @param lat latitude
+solar_geom <- function(doy,lon,lat){
+  
+  dt = median(diff(doy))*86400
+  hr = (doy - floor(doy))*24
+  
+  ## calculate potential radiation
+  f <- pi/180*(279.5+0.9856*doy)
+  et <- (-104.7*sin(f)+596.2*sin(2*f)+4.3*sin(4*f)-429.3*cos(f)-2.0*cos(2*f)+19.3*cos(3*f))/3600  #equation of time -> eccentricity and obliquity
+  merid <- floor(lon/15)*15
+  merid[merid<0] <- merid[merid<0]+15
+  lc <- (lon-merid)*-4/60  ## longitude correction
+  tz <- merid/360*24 ## time zone
+  midbin <- 0.5*dt/86400*24 ## shift calc to middle of bin
+  t0 <- 12+lc-et-tz-midbin   ## solar time
+  h <- pi/12*(hr-t0)  ## solar hour
+  dec <- -23.45*pi/180*cos(2*pi*(doy+10)/365)  ## declination
+  
+  cosz <- sin(lat*pi/180)*sin(dec)+cos(lat*pi/180)*cos(dec)*cos(h)
+  cosz[cosz<0] <- 0
+  
+  rpot <- 1366*cosz
+  return(rpot)
+}
 
 ### NEED TO ADD FUNCTION TO DETECT AND TRIM BURN-IN

@@ -4,12 +4,14 @@
 \alias{plot_ss}
 \title{plot_ss}
 \usage{
-plot_ss(time, fit, ...)
+plot_ss(time, fit, add = FALSE, ...)
 }
 \arguments{
 \item{time}{time axis values}
 
 \item{fit}{fit_dlm output object}
+
+\item{add}{add lines to current plot. Default is FALSE}
 
 \item{...}{optional graphical parameters}
 }

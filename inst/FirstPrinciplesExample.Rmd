@@ -1,45 +1,64 @@
 ---
-title: "FirstPrinciplesExample"
+title: "First Principles: Example"
 author: "Michael Dietze"
-date: "June 14, 2016"
 output: html_document
 ---
 
-```{r}
+```{r,include=FALSE}
 CLEAN=FALSE
+VERBOSE=FALSE
 library(ecoforecastR)
 n.iter = 5000
+n.iter.fx = 500
+## Sylvania
+lat = 46.2420
+lon = -89.3476
+train = 16*48
 ```
 
+To illustrate the application of the analytical concepts above, conside a simple example of fitting a dynamic linear model to Net Ecosystem Exchange (NEE) data from an eddy covariance tower, and then using that model to make a short-term forecast. Training data were downloaded for the Sylvania Wilderness Ameriflux tower for 2016 from Ankur Desai's real-time data server (http://flux.aos.wisc.edu/twiki/bin/view/Main/LabData). Sylvania is an old-growth Northern Hardwood-Hemlock forest located in upper peninsula Michigan (`r lat`,`r lon`). For purposes of model calibration the most recent `r train/48` days of data were used.
 
-
-```{r}
+```{r,echo=FALSE}
 ## read data
-flux <- read.csv("http://flux.aos.wisc.edu/data/cheas/sylvania/flux/prelim/sylvaniaflux_2016.txt",header=FALSE,skip=18,row.names=NULL)
-names <- apply(flux,2,function(x) as.character(x)[1])
-units <-  apply(flux,2,function(x) as.character(x)[2])
-flux <- sapply(flux[-(1:2),],function(x) as.numeric(as.character(x)))
-flux[flux==-9999] <- NA
-flux[flux==-6999] <- NA
-colnames(flux) = names
-flux = as.data.frame(flux)
-time <- as.POSIXct(strptime(paste(flux$YEAR,flux$DTIME),"%Y %j","GMT")) + (flux$DTIME-floor(flux$DTIME))*86400
+if(!file.exists("flux.RData") | CLEAN){
+  flux <- read.csv("http://flux.aos.wisc.edu/data/cheas/sylvania/flux/prelim/sylvaniaflux_2016.txt",header=FALSE,skip=18,row.names=NULL)
+  names <- apply(flux,2,function(x) as.character(x)[1])
+  units <-  apply(flux,2,function(x) as.character(x)[2])
+  flux <- sapply(flux[-(1:2),],function(x) as.numeric(as.character(x)))
+  flux[flux==-9999] <- NA
+  flux[flux==-6999] <- NA
+  colnames(flux) = names
+  flux = as.data.frame(flux)
+  time <- as.POSIXct(strptime(paste(flux$YEAR,flux$DTIME),"%Y %j","GMT")) + (flux$DTIME-floor(flux$DTIME))*86400
+  ## apply U* filter
+  flux$NEE[flux$`Flagu*` > 0 ] = NA
+  
+  save(flux,time,file="flux.RData")
+} else {
+  load("flux.RData")
+}
 
-## apply U* filter
-flux$NEE[flux$`Flagu*` > 0 ] = NA
+if(VERBOSE){
 plot(time,flux$NEE,type='l')
 ## response = NEE
 ## drivers = TA, TS1, TS2, PREC, RH, PRESS, VPD, SWC1, SWC2, PAR, etc.
 cor(flux[,c("NEE","TA","TS1","TS2","PREC","RH","VPD","SWC1","SWC2","PAR")],use = "pairwise.complete")
 plot(flux$PAR,-flux$NEE)
-summary(lm(NEE~PAR,flux))
+#summary(lm(NEE~PAR,flux))
+}
 
-data = flux[1:300,]
-my.time = time[seq_along(data$NEE)]
+## find latest data
+has.dat = apply(is.na(flux),1,sum)
+latest = rev(which(has.dat < 40))[1]
 
+sel = rev(latest - 0:train)
+data = flux[sel,]
+my.time = time[sel]
+cal.doy  = (as.numeric(as.POSIXct(my.time,tz=GMT)) - as.numeric(as.POSIXct("2016/01/01","GMT")) )/86400
 ```
 
-```{r}
+
+```{r,echo=FALSE}
 if(!file.exists("RWfit.RData") | CLEAN ){
   RWfit <- fit_dlm(list(obs="NEE",n.iter=n.iter),data)
   save(RWfit,file="RWfit.RData")
@@ -47,19 +66,278 @@ if(!file.exists("RWfit.RData") | CLEAN ){
   load("RWfit.RData")
 }
 
-plot_ss(my.time,RWfit,ylab="NEE",xlab="time")
-plot(RWfit$params)
-```
+if(VERBOSE){
+  plot_ss(cal.doy,RWfit,ylab="NEE",xlab="time",main="Random Walk model")
+  plot(RWfit$params)
+}
 
-```{r}
 if(!file.exists("FEfit.RData") | CLEAN ){
-  FEfit <- fit_dlm(model=list(obs="NEE",fixed="~ PAR + TS1",n.iter=n.iter),data)
+  FEfit <- fit_dlm(model=list(obs="NEE",fixed="~ PAR + TA",n.iter=n.iter),data)
   save(FEfit,file="FEfit.RData")
 }else{
   load("FEfit.RData")
 }
 
-plot_ss(my.time,FEfit,ylab="NEE",xlab="time")
-plot(FEfit$params)
-summary(FEfit$params)
+plot_ss(cal.doy,FEfit,ylab="NEE",xlab="Day of Year",main="Calibration",
+        ylim=quantile(as.matrix(FEfit$predict),c(0.005,0.995)))
+if(VERBOSE){
+  plot(FEfit$params)
+  #pairs(as.matrix(FEfit$params))
+}
+cal.parms <- summary(FEfit$params)
+
 ```
+
+**Figure XX** Dynamical linear model median (solid line) and 95% CI (shaded area) fit to observed flux data (+). 
+
+The dynamic linear model was fit using top-of-tower air temperature (Ta) and photosythetically active radiation (PAR) as covariates. The model was fit in a state-space framework where $NEE_o$ is the observed NEE values, $NEE$ is the latent (unobserved) true value of NEE, $\tau_o$ is the observation error, $\tau_p$ is the process error, and $\beta$ are the regression coefficients
+
+$$NEE_{t+1} \sim N(\beta_0 NEE_t + \beta_1 + \beta_2 Ta + \beta_3 PAR, \tau_p$$
+$$NEE_{o,t} \sim N(NEE_{t},\tau_o)$$
+
+Model fits and forecasts were performed in R (version `r getRversion()`, CITE) using the
+ecoforecastR R package (version `r packageVersion("ecoforecastR")`, available on Github at https://github.com/EcoForecast/ecoforecastR) and JAGS (CITE). Uninformative Normal priors (mean 0, precision 0.001) were assumed for the $\beta$s and uninformative Gamma(0.1,0.1) priors were assumed for the precisions.
+
+The fit itself shows that this simple linear model with two covariates can capture the diurnal cycle of the flux data, though with condiderable uncertainty during periods of missing data. Following the standard atmospheric sign convention for NEE data (negative values are uptake into the ecosystem), we observe large negative uptakes of carbon during the day and moderate positive losses at night. In terms of exogenous sensitivity, this cycle is driven primarily by the the expected negative slope for PAR, with a CI that does not overlap with zero. Air temperature likewise shows a negative relationship, but this slope does overlap zero. In terms of endogenous stability, the slope of the internal stability term is large (`r cal.parms$statistics['beta_IC','Mean']`), though stable (less than 1) with a CI that was far from 0, thus indicating significant system memory in NEE. In terms of the error terms, the observation error had much higher precision (lower variance), than the process error, suggesting that much of the observed NEE variability represents real variation that the simple model is not capturing. This conclusion is somewhat at odds with the standard literature in the flux community, which acknowledges substantial observation errors in fluxes (CITE). The present analysis is purely for proof-of-concept purposes, and a more in depth analysis could be improved in a number of specific ways. First, while there is some debate on the exact shape of the flux error funciton (CITE), a number of researchers have suggested that a fat-tailed Laplace distribution is more appropriate for eddy-covariance than a Normal. Second, there is general agreement that eddy-covariance data is heteroskedastic (the error increases with the magnitude of the flux) and that this heteroskedasticity is asymmetric (negative fluxes have lower error than postive fluxes, as the nighttime conditions associated with respiration face stiller air and more advective losses). Third, established methods for quantifying the random error in eddy-covariance could be used to construct informative priors on the observation error. Indeed, such estimates now often come with FLUXNET and NEON flux products (CITE). Finally, it is well known that separating process and observation error can be challenging in state-space models, and thus a general suggestion is that any more in depth analysis on any data, not just eddy-covariance, pay close attention to observation error and make use of informative priors wherever they can be inferred.  Nonetheless, this model, in its extreme simplicity, represents a useful baseline for evaluating the performance of any nonlinear statistical or process-based model.
+
+```{r}
+knitr::kable(cbind(cal.parms$statistics[,1:2],cal.parms$quantiles[,c(1,5)]))
+```
+
+**Table XX** Posterior mean, standard deviation, and 95% CI for fit parameters
+
+
+
+```{r,echo=FALSE}
+if(!file.exists("NOAA.RData") | CLEAN){
+  library(rnoaa)
+  gefs_variables()
+  TA = gefs("Temperature_height_above_ground_ens",lat,lon,raw=TRUE)
+  SW = gefs("Downward_Short-Wave_Radiation_Flux_surface_6_Hour_Average_ens",lat,lon,raw=TRUE)
+  # note: first column might be an indicator?
+
+
+SW_time =  seq(to=384,length=ncol(SW$data),by=6)
+plot(SW_time,SW$data[1,],ylim=range(SW$data),type='l')
+for(i in 2:nrow(SW$data)){
+    lines(SW_time,SW$data[i,],type='l')
+}
+ci_SW <- apply(SW$data,2,quantile,c(0.05,0.5,0.95))
+plot(SW_time,SW$data[1,],ylim=range(SW$data),type='n')
+ciEnvelope(SW_time,ci_SW[1,],ci_SW[3,],col="lightBlue")
+lines(SW_time,ci_SW[2,],lwd=2)
+
+
+TA_time = seq(to=384,length=ncol(TA$data),by=6)
+ci_TA <- apply(TA$data,2,quantile,c(0.05,0.5,0.95))
+plot(TA_time,TA$data[1,],ylim=range(TA$data),type='n')
+ciEnvelope(TA_time,ci_TA[1,],ci_TA[3,],col="lightBlue")
+lines(TA_time,ci_TA[2,],lwd=2)
+
+#plot(TA_time,TA$data[1,],ylim=range(TA$data),type='l')
+#for(i in 2:nrow(TA$data)){
+#  lines(TA_time,TA$data[i,],type='l')
+#}
+
+## organize into newdata
+nens = nrow(TA$data)
+ntime = min(c(length(TA_time),length(SW_time)))
+nvar = 3
+meta <- list()
+meta[[1]] = 1:nens
+meta[[2]] = seq(to=384,length=ntime,by=6)
+meta[[3]] = c("Intercept","PAR","TA")
+newdata = array(NA,dim = c(nens,ntime,nvar),dimnames = meta)
+newdata[,,"TA"] = TA$data[,-1] - 273.15
+newdata[,,"PAR"] = SW$data[,]*0.486/0.235 
+newdata[,,"Intercept"] = 1
+
+## DOWNSCALE ****************
+start.time = as.POSIXct(as.Date(TA$forecast_date,format = "%Y%m%d",tz=GMT)) +
+             as.numeric(TA$forecast_time)/100*3600
+new.time = seq(0,rev(meta[[2]])[1],by=0.5)
+old.doy  = as.numeric(start.time) - as.numeric(as.POSIXct("2016/01/01","GMT")) + meta[[2]]*3600
+old.doy  = old.doy / 86400
+new.doy  = as.numeric(start.time) - as.numeric(as.POSIXct("2016/01/01","GMT")) + new.time*3600
+new.doy  = new.doy / 86400
+fTA   <- apply(newdata[,,"TA"],1,function(x){splinefun(meta[[2]],x, method = "monoH.FC")})
+TA.ds <- sapply(fTA,function(x){x(new.time)})
+
+rpot <- solar_geom(new.doy,lon,lat)*0.486 /.235
+plot(new.doy,rpot,type='l')
+lines(old.doy,apply(newdata[,,"PAR"],2,median),col=2)
+agg = c(1,rep(1:length(old.doy),each=round(length(new.doy)/length(old.doy))))
+rpot.agg = tapply(rpot,agg,mean)
+lines(old.doy,rpot.agg,col=3)
+PAR.ds <- apply(newdata[,,"PAR"],1,function(x){rpot*x[agg]/rpot.agg[agg]})
+
+meta.ds <- list()
+meta.ds[[1]] = 1:nens
+meta.ds[[2]] = new.doy
+meta.ds[[3]] = c("Intercept","PAR","TA")
+newdata.ds = array(NA,dim = c(nens,length(new.doy),nvar),dimnames = meta.ds)
+newdata.ds[,,"TA"] = t(TA.ds)
+newdata.ds[,,"PAR"] = t(PAR.ds) 
+newdata.ds[,,"Intercept"] = 1
+
+  save(TA,SW,meta,meta.ds,newdata,newdata.ds,file="NOAA.RData")
+
+}else{
+  load("NOAA.RData")
+}
+
+ci_TA <- apply(newdata.ds[,,"TA"],2,quantile,c(0.05,0.5,0.95))
+plot(meta.ds[[2]],ci_TA[2,],ylim=range(ci_TA),type='n',ylab="Air Temperature",xlab="Day of Year")
+ciEnvelope(meta.ds[[2]],ci_TA[1,],ci_TA[3,],col="lightBlue")
+lines(meta.ds[[2]],ci_TA[2,],lwd=2)
+
+ci_PAR <- apply(newdata.ds[,,"PAR"],2,quantile,c(0.05,0.5,0.95))
+plot(meta.ds[[2]],ci_PAR[2,],ylim=range(ci_PAR),type='n',ylab="PAR",xlab="Day of Year")
+ciEnvelope(meta.ds[[2]],ci_PAR[1,],ci_PAR[3,],col="lightBlue")
+lines(meta.ds[[2]],ci_PAR[2,],lwd=2)
+```
+
+
+
+```{r, echo=FALSE}
+# FE_pred <- predict_dlm(FEfit,newdata,n.iter=n.iter.fx)
+# plot_ss(meta[[2]],FE_pred,ylab="NEE",xlab="time") #add=TRUE
+FE_pred.ds <- predict_dlm(FEfit,newdata.ds,n.iter=n.iter.fx)
+plot_ss(meta.ds[[2]],FE_pred.ds,ylab="NEE",xlab="time")
+```
+
+The NEE was then forecast for the next 16 days using the fit model and weather forecast data from NOAA's Global Ensemble Forecast System (GEFS), which was downloaded using the rNOAA package ((version `r packageVersion("rNOAA")`). Driver uncertainty was captured by the spread of the 21 members of the ensemble forecast. Air temperature data was downscaled to 30 min by fitting a spline through the six-hourly forecast product. The PAR forecast represents a six-hour average, so this was downscaled to 30 min in proportion to an expected incident radiation based on solar geometry. This approach is equivalent to assuming a constant cloudiness for each six-hour period.
+
+
+Forecasts were made using a `r n.iter.fx` member ensemble, with each ensemble member sampling a set of drivers with replacement from the forecast ensemble. Similarly, parameters and initial conditions were sampled from the state-space posterior estimates, with the initial condition estimate being the final NEE state estimate from the calibration period.
+
+The uncertainty in model predictions was partitioned using two different approaches. The first generated using the analytical approximation discussed previously. The second was generated by running a series of forecasts that included different sources of uncertainty, and estimating the effect of a process as the difference in variance between pairs of scenarios. Specifically, we started with just Initial Condition uncertainty and then sequentially added parameter uncertainty, driver uncertainty, and then process uncertainty. The results of these two approaches were qualitatively similar but differ slightly because of the sequential nature of the second approach, and because it accounts for the additional interactions and non-linearities not in the linear approximation. These results are summarized in terms of time series plots of the relative proportion of variance attributable to each term.
+
+```{r,echo=FALSE}
+## just initial condition uncertainty
+FE_pred.I <- predict_dlm(FEfit,newdata.ds,n.iter=n.iter.fx,include="I")
+
+## initial conditions + parameters
+FE_pred.IP <- predict_dlm(FEfit,newdata.ds,n.iter=n.iter.fx,include=c("I","P"))
+
+## IC + param + Drivers
+FE_pred.IPD <- predict_dlm(FEfit,newdata.ds,n.iter=n.iter.fx,include=c("I","P","D"))
+
+if(VERBOSE){
+  plot_ss(meta.ds[[2]],FE_pred.I,ylab="NEE",xlab="time")
+  plot_ss(meta.ds[[2]],FE_pred.IP,ylab="NEE",xlab="time")
+  plot_ss(meta.ds[[2]],FE_pred.IPD,ylab="NEE",xlab="time")
+}
+```
+
+
+```{r,echo=FALSE}
+## FULL
+plot_ss(meta.ds[[2]],FE_pred.ds,ylab="NEE",xlab="Day of Year")
+varIPDE <- apply(as.matrix(FE_pred.ds$predict),2,var)
+
+## IPD
+ciIPD <- apply(as.matrix(FE_pred.IPD$predict),2,quantile,c(0.025,0.5,0.975))
+ciEnvelope(meta.ds[[2]],ciIPD[1,],ciIPD[3,],col="firebrick2")
+varIPD <- apply(as.matrix(FE_pred.IPD$predict),2,var)
+
+## IP
+ciIP <- apply(as.matrix(FE_pred.IP$predict),2,quantile,c(0.025,0.5,0.975))
+ciEnvelope(meta.ds[[2]],ciIP[1,],ciIP[3,],col="lightGreen")
+varIP <- apply(as.matrix(FE_pred.IP$predict),2,var)
+
+## I
+ciI <- apply(as.matrix(FE_pred.I$predict),2,quantile,c(0.025,0.5,0.975))
+ciEnvelope(meta.ds[[2]],ciI[1,],ciI[3,],col="violet")
+lines(meta.ds[[2]],ciI[2,],col="darkGreen",lwd=2)
+varI <- apply(as.matrix(FE_pred.I$predict),2,var)
+
+```
+
+
+```{r,echo=FALSE}
+fit = FEfit
+pred = FE_pred.ds
+theta <- as.matrix(fit$params)
+Z <- pred$newdata
+
+## time invariant terms
+  ## endogenous
+m.ic <- median(theta[,"beta_IC"])
+  ## exogenous
+covs = colnames(theta)[grep("beta",colnames(theta))]
+covs = covs[-which(covs == "beta_IC")]
+m.driver = apply(theta[,covs],2,median)
+  ## parameter
+V.par = cov(theta[,covs])
+  ## process
+V.process = median(1/sqrt(theta[,"tau_add"]))
+
+## time-variante terms
+  ## endogenous
+V.ic <- apply(pred$predict,2,var)
+  ## exogenous
+V.driver <- apply(Z,2,cov)
+  ## parameter
+m.par = apply(Z,2,apply,2,mean)
+
+IC.recursion = V.ic[1]
+for(t in 2:length(V.ic)){
+  IC.recursion[t] = m.ic^2*IC.recursion[t-1]
+}
+
+## For IC formulation, the calculation ic     = m.ic^2*V.ic gives the current state
+V.pred <- data.frame(ic     = IC.recursion,
+               param  = apply(m.par,2,function(x){sum(x%*%t(x)*V.par)}),
+               driver = apply(as.vector(m.driver %*% t(m.driver))*V.driver,2,sum),
+               process = V.process
+               )
+V.pred.rel <- apply(V.pred,1,function(x) {cumsum(x)/sum(x)})
+
+#par(mfrow=c(2,1))
+
+stack.cols = c("black",2,3,"lightBlue")
+plot(meta.ds[[2]],V.pred.rel[1,],ylim=c(0,1),type='n',main="Analytical Approximation")
+ciEnvelope(meta.ds[[2]],rep(0,ncol(V.pred.rel)),V.pred.rel[1,],col=stack.cols[1])
+ciEnvelope(meta.ds[[2]],V.pred.rel[1,],V.pred.rel[2,],col=stack.cols[2])
+ciEnvelope(meta.ds[[2]],V.pred.rel[2,],V.pred.rel[3,],col=stack.cols[3])
+ciEnvelope(meta.ds[[2]],V.pred.rel[3,],V.pred.rel[4,],col=stack.cols[4])
+legend("topright",legend=rev(colnames(V.pred)),col=rev(stack.cols),lty=1,lwd=5)
+
+
+V.pred.sim.rel <- apply(rbind(varIPDE,varIPD,varIP,varI),2,function(x) {x/max(x)})
+plot(meta.ds[[2]],V.pred.sim.rel[1,],ylim=c(0,1),type='n',main="Via Simulation")
+ciEnvelope(meta.ds[[2]],rep(0,ncol(V.pred.sim.rel)),V.pred.sim.rel[4,],col=stack.cols[1])
+ciEnvelope(meta.ds[[2]],V.pred.sim.rel[4,],V.pred.sim.rel[3,],col=stack.cols[2])
+ciEnvelope(meta.ds[[2]],V.pred.sim.rel[3,],V.pred.sim.rel[2,],col=stack.cols[3])
+ciEnvelope(meta.ds[[2]],V.pred.sim.rel[2,],V.pred.sim.rel[1,],col=stack.cols[4])
+legend("topright",legend=rev(colnames(V.pred)),col=rev(stack.cols),lty=1,lwd=5)
+
+sim.rel.mean = apply(V.pred.sim.rel,1,mean)
+sim.rel.mean = c(sim.rel.mean[4],diff(rev(sim.rel.mean)))
+
+rel.mean = apply(V.pred,2,mean)
+rel.mean = rel.mean/sum(rel.mean)
+
+var.part.table = rbind(rel.mean,sim.rel.mean)
+colnames(var.part.table) <- c("IC","Params","Drivers","Error")
+rownames(var.part.table) <- c("Analytical",'Simulation')
+knitr::kable(var.part.table)
+
+```
+
+
+
+
+TO-DO:
+
+* clean up
+* write text
+* To be consistent with main text, should have random effects, model error should be AR1
+
+## APPENDIX
+```{r,echo=FALSE}
+  plot(FEfit$params)
+```
+
+
