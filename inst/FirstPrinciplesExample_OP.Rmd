@@ -4,13 +4,16 @@ author: "Michael Dietze"
 output: html_document
 ---
 
+Modifications by Owen Petchey.
+
+
 ```{r,include=FALSE}
 rm(list=ls())
 library(tidyverse)
 library(lubridate)
 library(GGally)
 CLEAN=FALSE
-VERBOSE=FALSE
+VERBOSE=TRUE
 library(ecoforecastR)
 n.iter = 5000
 n.iter.fx = 500
@@ -24,10 +27,12 @@ To illustrate the application of the analytical concepts above, conside a simple
 
 ```{r,echo=FALSE}
 ## read data
-if(!file.exists("flux.RData") | CLEAN){
+if(!file.exists("flux_OP.RData") | CLEAN){
   flux_master <- read_csv("http://flux.aos.wisc.edu/data/cheas/sylvania/flux/prelim/sylvaniaflux_2016.txt",
                    col_names = FALSE,
                    skip=18)
+  
+  ## Get a warning 53 columns expected, 54 found. Seems to be unimportant
   
   vars <- data.frame(var_names=as.character(flux_master[1,]),
                      var_units=as.character(flux_master[2,]))
@@ -41,12 +46,15 @@ if(!file.exists("flux.RData") | CLEAN){
   flux <- mutate(flux, time=as.POSIXct(strptime(paste(YEAR,DTIME),"%Y %j","GMT")) + (DTIME-floor(DTIME))*86400,
                  cal_doy=yday(time) + hour(time)/24 + minute(time)/60/24 + second(time)/60/60/24)
   
-  ## apply U* filter
-  flux <- filter(flux, `Flagu*`>0)
   
-  save(flux,file="flux.RData")
+  flux <- arrange(flux, time)
+  
+  ## apply U* filter
+  flux <- mutate(flux, NEE=ifelse(`Flagu*`>0, NA, NEE))
+  
+  save(flux,file="flux_OP.RData")
 } else {
-  load("flux.RData")
+  load("flux_OP.RData")
 }
 
 if(VERBOSE){
@@ -63,43 +71,69 @@ ggplot(flux, aes(x=PAR, y=NEE, col=as.factor(hour(time)))) +
 #summary(lm(NEE~PAR,flux))
 }
 
-## find latest data and use it for training
-has.dat = apply(is.na(flux),1,sum)
-latest = rev(which(has.dat < 40))[1]
+## make a dataframe of training data
+sel = (nrow(flux)-train) : nrow(flux)
+training_data = slice(flux, sel)
+#my.time = time[sel]
+#cal.doy  = (as.numeric(as.POSIXct(my.time,tz=GMT)) - as.numeric(as.POSIXct("2016/01/01","GMT")) )/86400
 
-sel = rev(latest - 0:train)
-training_data = flux[sel,]
-my.time = time[sel]
-cal.doy  = (as.numeric(as.POSIXct(my.time,tz=GMT)) - as.numeric(as.POSIXct("2016/01/01","GMT")) )/86400
+ggplot(flux, aes(x=time, y=NEE)) +
+    geom_line(col="grey") +
+    geom_point(mapping=aes(colour=as.factor(hour(time))), size=2) +
+    geom_point(data=training_data, col="black", size=0.5)
+
+#training_data$NEE
+
 ```
 
 
 ```{r,echo=FALSE}
-if(!file.exists("RWfit.RData") | CLEAN ){
-  RWfit <- fit_dlm(list(obs="NEE",n.iter=n.iter),data)
-  save(RWfit,file="RWfit.RData")
+if(!file.exists("RWfit_OP.RData") | CLEAN ){
+  RWfit <- fit_dlm(list(obs="NEE", n.iter=n.iter), training_data)
+  save(RWfit,file="RWfit_OP.RData")
 }else{
-  load("RWfit.RData")
+  load("RWfit_OP.RData")
 }
 
 if(VERBOSE){
-  plot_ss(cal.doy,RWfit,ylab="NEE",xlab="time",main="Random Walk model")
+  
+  ci <- data.frame(time=training_data$time,
+                   t(apply(as.matrix(RWfit$predict),2,quantile,c(0.025,0.5,0.975))))
+  
+  ggplot(ci, aes(x=time, y=X50.)) +
+    geom_ribbon(aes(ymin=X2.5., ymax=X97.5.), alpha=0.3) +
+    geom_line() +
+    geom_point(data=training_data, mapping=aes(x=time, y=NEE), size=0.5, col="blue") +
+    xlab("Time") +
+    ylab("NEE")
+  
   plot(RWfit$params)
+  
 }
 
-if(!file.exists("FEfit.RData") | CLEAN ){
-  FEfit <- fit_dlm(model=list(obs="NEE",fixed="~ PAR + TA",n.iter=n.iter),data)
-  save(FEfit,file="FEfit.RData")
+if(!file.exists("FEfit_OP.RData") | CLEAN ){
+  FEfit <- fit_dlm(model=list(obs="NEE",fixed="~ PAR + TA",n.iter=n.iter),training_data)
+  save(FEfit,file="FEfit_OP.RData")
 }else{
-  load("FEfit.RData")
+  load("FEfit_OP.RData")
 }
 
-plot_ss(cal.doy,FEfit,ylab="NEE",xlab="Day of Year",main="Calibration",
-        ylim=quantile(as.matrix(FEfit$predict),c(0.005,0.995)))
+
+ci <- data.frame(time=training_data$time,
+                 t(apply(as.matrix(FEfit$predict),2,quantile,c(0.025,0.5,0.975))))
+
+ggplot(ci, aes(x=time, y=X50.)) +
+  geom_ribbon(aes(ymin=X2.5., ymax=X97.5.), alpha=0.3) +
+  geom_line() +
+  geom_point(data=training_data, mapping=aes(x=time, y=NEE), size=0.5, col="blue") +
+  xlab("Time") +
+  ylab("NEE")
+
 if(VERBOSE){
   plot(FEfit$params)
   #pairs(as.matrix(FEfit$params))
 }
+
 cal.parms <- summary(FEfit$params)
 
 ```
@@ -124,7 +158,7 @@ knitr::kable(cbind(cal.parms$statistics[,1:2],cal.parms$quantiles[,c(1,5)]))
 
 
 
-```{r,echo=FALSE}
+```{r,echo=FALSE, eval=F}
 if(!file.exists("NOAA.RData") | CLEAN){
   library(rnoaa)
   gefs_variables()
@@ -215,7 +249,7 @@ lines(meta.ds[[2]],ci_PAR[2,],lwd=2)
 
 
 
-```{r, echo=FALSE}
+```{r, echo=FALSE, eval=F}
 # FE_pred <- predict_dlm(FEfit,newdata,n.iter=n.iter.fx)
 # plot_ss(meta[[2]],FE_pred,ylab="NEE",xlab="time") #add=TRUE
 FE_pred.ds <- predict_dlm(FEfit,newdata.ds,n.iter=n.iter.fx)
@@ -229,7 +263,7 @@ Forecasts were made using a `r n.iter.fx` member ensemble, with each ensemble me
 
 The uncertainty in model predictions was partitioned using two different approaches. The first generated using the analytical approximation discussed previously. The second was generated by running a series of forecasts that included different sources of uncertainty, and estimating the effect of a process as the difference in variance between pairs of scenarios. Specifically, we started with just Initial Condition uncertainty and then sequentially added parameter uncertainty, driver uncertainty, and then process uncertainty. The results of these two approaches were qualitatively similar but differ slightly because of the sequential nature of the second approach, and because it accounts for the additional interactions and non-linearities not in the linear approximation. These results are summarized in terms of time series plots of the relative proportion of variance attributable to each term.
 
-```{r,echo=FALSE}
+```{r,echo=FALSE, eval=F}
 ## just initial condition uncertainty
 FE_pred.I <- predict_dlm(FEfit,newdata.ds,n.iter=n.iter.fx,include="I")
 
@@ -247,7 +281,7 @@ if(VERBOSE){
 ```
 
 
-```{r,echo=FALSE}
+```{r,echo=FALSE, eval=F}
 ## FULL
 plot_ss(meta.ds[[2]],FE_pred.ds,ylab="NEE",xlab="Day of Year")
 varIPDE <- apply(as.matrix(FE_pred.ds$predict),2,var)
@@ -271,7 +305,7 @@ varI <- apply(as.matrix(FE_pred.I$predict),2,var)
 ```
 
 
-```{r,echo=FALSE}
+```{r,echo=FALSE, eval=F}
 fit = FEfit
 pred = FE_pred.ds
 theta <- as.matrix(fit$params)
@@ -352,7 +386,7 @@ TO-DO:
 * To be consistent with main text, should have random effects, model error should be AR1
 
 ## APPENDIX
-```{r,echo=FALSE}
+```{r,echo=FALSE, eval=F}
   plot(FEfit$params)
 ```
 
