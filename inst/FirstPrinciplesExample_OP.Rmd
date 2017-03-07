@@ -1,7 +1,9 @@
 ---
 title: "First Principles: Example"
 author: "Michael Dietze"
-output: html_document
+output: 
+  html_document: 
+    keep_md: yes
 ---
 
 Modifications by Owen Petchey.
@@ -57,7 +59,7 @@ if(!file.exists("flux_OP.RData") | CLEAN){
   load("flux_OP.RData")
 }
 
-if(VERBOSE){
+#if(VERBOSE){
 
 ggplot(flux, aes(x=time, y=NEE)) +
     geom_line(col="grey") +
@@ -69,7 +71,7 @@ ggpairs(flux[,c("NEE","TA","TS1","TS2","PREC","RH","VPD","SWC1","SWC2","PAR")])
 ggplot(flux, aes(x=PAR, y=NEE, col=as.factor(hour(time)))) +
   geom_point()
 #summary(lm(NEE~PAR,flux))
-}
+#}
 
 ## make a dataframe of training data
 sel = (nrow(flux)-train) : nrow(flux)
@@ -95,7 +97,7 @@ if(!file.exists("RWfit_OP.RData") | CLEAN ){
   load("RWfit_OP.RData")
 }
 
-if(VERBOSE){
+#if(VERBOSE){
   
   ci <- data.frame(time=training_data$time,
                    t(apply(as.matrix(RWfit$predict),2,quantile,c(0.025,0.5,0.975))))
@@ -109,7 +111,7 @@ if(VERBOSE){
   
   plot(RWfit$params)
   
-}
+#}
 
 if(!file.exists("FEfit_OP.RData") | CLEAN ){
   FEfit <- fit_dlm(model=list(obs="NEE",fixed="~ PAR + TA",n.iter=n.iter),training_data)
